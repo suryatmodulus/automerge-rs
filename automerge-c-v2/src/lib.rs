@@ -4,6 +4,7 @@ extern crate libc;
 extern crate serde;
 
 use core::fmt::Debug;
+use automerge_protocol::msgpack::Packable;
 use std::{
     borrow::Cow,
     convert::TryInto,
@@ -16,7 +17,8 @@ use std::{
 
 use automerge_backend::{AutomergeError, Change};
 use automerge_protocol as amp;
-use automerge_protocol::{error::InvalidActorId, ActorId, ChangeHash, Patch};
+//use automerge_protocol::{error::InvalidActorId, ActorId, ChangeHash, Patch, msgpack::Packable};
+use automerge_protocol::{error::InvalidActorId, ActorId, ChangeHash, Patch, error::DecodeError};
 use errno::{set_errno, Errno};
 
 // I dislike using macros but it saves me a bunch of typing
@@ -76,6 +78,24 @@ macro_rules! from_msgpack {
         match rmp_serde::from_read_ref(slice) {
             Ok(v) => v,
             Err(e) => return $backend.handle_error(CError::FromMessagePack(e)),
+        }
+    }};
+}
+
+/// Try to deserialize some bytes into a value using MessagePack
+/// return an error code if failure
+macro_rules! from_msgpack2 {
+    ($backend:expr, $ptr:expr, $len:expr) => {{
+        // Null pointer check?
+        if $ptr.as_ref().is_none() {
+            return $backend.handle_error(CError::NullChange);
+        }
+        let mut slice = std::slice::from_raw_parts($ptr, $len);
+        let rmp_value = rmpv::decode::value::read_value(&mut slice).unwrap();
+        //let patch: Patch = rmp_value.try_into().unwrap(); //rmp_serde::from_read_ref(slice).unwrap();
+        match rmp_value.try_into() {
+            Ok(v) => v,
+            Err(e) => return $backend.handle_error(CError::FromMessagePack2(e)),
         }
     }};
 }
@@ -155,6 +175,8 @@ pub enum CError {
     #[error(transparent)]
     Automerge(#[from] AutomergeError),
     #[error(transparent)]
+    FromMessagePack2(#[from] DecodeError),
+    #[error(transparent)]
     InvalidActorid(#[from] InvalidActorId),
 }
 
@@ -178,6 +200,7 @@ impl CError {
             CError::InvalidActorid(_) => BASE + 8,
             CError::NoLocalChange => BASE + 9,
             CError::Automerge(_) => BASE + 10,
+            CError::FromMessagePack2(_) => BASE + 11,
         };
         -code
     }
@@ -251,6 +274,17 @@ impl Backend {
             Err(e) => self.handle_error(CError::ToMessagePack(e)),
         }
     }
+
+    unsafe fn write_msgpack2<T: amp::msgpack::Packable>(
+        &mut self,
+        vals: &T,
+        buffers: &mut Buffer,
+    ) -> isize {
+        match write_msgpack_to_buff2(vals, buffers) {
+            Ok(()) => 0,
+            Err(e) => self.handle_error(CError::ToMessagePack(e)),
+        }
+    }
 }
 
 impl Deref for Backend {
@@ -319,6 +353,19 @@ unsafe fn write_msgpack_to_buff<T: serde::ser::Serialize>(
     Ok(())
 }
 
+unsafe fn write_msgpack_to_buff2<T: amp::msgpack::Packable>(
+    vals: &T,
+    buff: &mut Buffer,
+) -> Result<(), rmp_serde::encode::Error> {
+    let mut data = get_data_vec!(buff);
+    data.clear();
+    vals.pack(&mut data);
+//    let mut writer = std::io::Cursor::new(&mut data);
+//    rmp_serde::encode::write_named(&mut writer, &vals)?;
+    write_to_buff_epilogue!(buff, data);
+    Ok(())
+}
+
 unsafe fn write_bin_to_buff(bin: &[u8], buff: &mut Buffer) {
     let mut data = get_data_vec!(buff);
     data.set_len(0);
@@ -344,10 +391,10 @@ pub unsafe extern "C" fn automerge_apply_local_change(
 ) -> isize {
     let backend = get_backend_mut!(backend);
     let buffs = get_buff_mut!(buffs);
-    let request: amp::Change = from_msgpack!(backend, request, len);
+    let request: amp::Change = from_msgpack2!(backend, request, len);
     let (patch, change) = call_automerge!(backend, backend.apply_local_change(request));
     backend.last_local_change = Some(change.raw_bytes().to_vec());
-    backend.write_msgpack(&patch, buffs)
+    backend.write_msgpack2(&patch, buffs)
 }
 
 /// # Safety
@@ -380,7 +427,7 @@ pub unsafe extern "C" fn automerge_apply_changes(
     let buffs = get_buff_mut!(buffs);
     let changes = get_changes!(backend, changes, changes_len);
     let patch = call_automerge!(backend, backend.apply_changes(changes));
-    backend.write_msgpack(&patch, buffs)
+    backend.write_msgpack2(&patch, buffs)
 }
 
 /// # Safety
@@ -391,7 +438,7 @@ pub unsafe extern "C" fn automerge_get_patch(backend: *mut Backend, buffs: *mut 
     let backend = get_backend_mut!(backend);
     let buff = get_buff_mut!(buffs);
     let patch = call_automerge!(backend, backend.get_patch());
-    backend.write_msgpack(&patch, buff)
+    backend.write_msgpack2(&patch, buff)
 }
 
 /// # Safety
@@ -487,7 +534,7 @@ pub unsafe extern "C" fn automerge_decode_change(
     let buffs = get_buff_mut!(buffs);
     let bytes = std::slice::from_raw_parts(change, len);
     let change = call_automerge!(backend, Change::from_bytes(bytes.to_vec()));
-    backend.write_msgpack(&change.decode(), buffs);
+    backend.write_msgpack2(&change.decode(), buffs);
     0
 }
 
@@ -502,7 +549,7 @@ pub unsafe extern "C" fn automerge_encode_change(
 ) -> isize {
     let backend = get_backend_mut!(backend);
     let buff = get_buff_mut!(buffs);
-    let uncomp: amp::Change = from_msgpack!(backend, change, len);
+    let uncomp: amp::Change = from_msgpack2!(backend, change, len);
     // This should never panic?
     let change: Change = uncomp.try_into().unwrap();
     write_bin_to_buff(change.raw_bytes(), buff);
@@ -603,7 +650,7 @@ pub unsafe extern "C" fn automerge_receive_sync_message(
         backend.receive_sync_message(&mut sync_state.handle, msg)
     );
     if let Some(patch) = patch {
-        backend.write_msgpack(&patch, buffs)
+        backend.write_msgpack2(&patch, buffs)
     } else {
         // There is nothing to return, clear the buffs
         clear_buffs(buffs);
@@ -704,7 +751,10 @@ pub unsafe extern "C" fn debug_json_change_to_msgpack(
     let uncomp: amp::Change = serde_json::from_str(&s).unwrap();
 
     // `unwrap` here is ok b/c this is a debug function
-    let mut bytes = ManuallyDrop::new(rmp_serde::to_vec_named(&uncomp).unwrap());
+//    let mut bytes = ManuallyDrop::new(rmp_serde::to_vec_named(&uncomp).unwrap());
+    let mut data = Vec::new();
+    uncomp.pack(&mut data);
+    let mut bytes = ManuallyDrop::new(data);
     *out_msgpack = bytes.as_mut_ptr();
     *out_len = bytes.len();
     0
@@ -728,8 +778,9 @@ pub unsafe extern "C" fn debug_print_msgpack_patch(
         panic!("invalid len: 0");
     }
     let prefix = from_cstr(prefix);
-    let slice = std::slice::from_raw_parts(buff, len);
-    let patch: Patch = rmp_serde::from_read_ref(slice).unwrap();
+    let mut slice = std::slice::from_raw_parts(buff, len);
+    let rmp_value = rmpv::decode::value::read_value(&mut slice).unwrap();
+    let patch: Patch = rmp_value.try_into().unwrap(); //rmp_serde::from_read_ref(slice).unwrap();
     let as_json = serde_json::to_string(&patch).unwrap();
     println!("{}: {}", prefix, as_json);
 }
