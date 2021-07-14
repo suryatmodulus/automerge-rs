@@ -1,6 +1,8 @@
 pub mod error;
+pub mod msgpack;
 mod serde_impls;
 mod utility_impls;
+use crate::error::DecodeError;
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
@@ -9,6 +11,11 @@ use std::{
     num::NonZeroU32,
     slice::Iter,
 };
+
+use msgpack::Packable;
+
+extern crate rmp;
+extern crate serde_json;
 
 use error::InvalidScalarValues;
 use serde::{
@@ -181,6 +188,23 @@ impl ElementId {
 pub enum Key {
     Map(SmolStr),
     Seq(ElementId),
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Key::Map(s) => write!(f, "{}", s.to_string()),
+            Key::Seq(ele) => write!(f, "{}", ele.to_string()),
+        }
+    }
+    /*
+        pub fn to_string(&self) -> String {
+            match self {
+                Key::Map(s) => s.to_string(),
+                Key::Seq(ele) => ele.to_string(),
+            }
+        }
+    */
 }
 
 impl Key {
@@ -820,4 +844,36 @@ impl Change {
         }
         None
     }
+}
+
+pub fn roundtrip_change(change: &Change) -> Result<(), DecodeError> {
+    let mut data = Vec::new();
+    change.pack(&mut data);
+    let value = rmpv::decode::value::read_value(&mut data.as_slice())
+        .map_err(|e| DecodeError(format!("rmpv decode error {:?}", e)))?;
+    let result: Change = value.try_into()?;
+    if &result != change {
+        let json = serde_json::to_string(&change).unwrap();
+        println!("{}", json);
+        let json = serde_json::to_string(&result).unwrap();
+        println!("{}", json);
+        panic!("change roundtrip failed");
+    }
+    Ok(())
+}
+
+pub fn roundtrip_patch(patch: &Patch) -> Result<(), DecodeError> {
+    let mut data = Vec::new();
+    patch.pack(&mut data);
+    let value = rmpv::decode::value::read_value(&mut data.as_slice())
+        .map_err(|e| DecodeError(format!("rmpv decode error {:?}", e)))?;
+    let result: Patch = value.try_into()?;
+    if &result != patch {
+        let json = serde_json::to_string(&patch).unwrap();
+        println!("{}", json);
+        let json = serde_json::to_string(&result).unwrap();
+        println!("{}", json);
+        panic!("patch roundtrip failed");
+    }
+    Ok(())
 }

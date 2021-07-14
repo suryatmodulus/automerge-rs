@@ -3,7 +3,7 @@ use std::path::Path;
 // Not really an example, more
 // of a build script
 use automerge_protocol as amp;
-use serde::ser::Serialize;
+use automerge_protocol::msgpack::Packable;
 
 fn main() {
     let file_path = Path::new(file!()).parent().unwrap();
@@ -30,19 +30,24 @@ fn main() {
         let json = std::fs::read_to_string(&json_name)
             .unwrap_or_else(|_| panic!("Failed to read: {:?}", json_name));
         let mut buf = vec![];
-        let mut serializer = rmp_serde::encode::Serializer::new(&mut buf)
-            .with_struct_map()
-            .with_string_variants();
+        /*
+                let mut serializer = rmp_serde::encode::Serializer::new(&mut buf)
+                    .with_struct_map()
+                    .with_string_variants();
+        */
         if name.contains("change") {
             let change: amp::Change = serde_json::from_str(&json).unwrap();
-            change.serialize(&mut serializer).unwrap();
+            //            change.serialize(&mut serializer).unwrap();
+            change.pack(&mut buf);
         } else if name.contains("multi_element_insert") {
             let multi: amp::DiffEdit = serde_json::from_str(&json).unwrap();
-            multi.serialize(&mut serializer).unwrap();
+            //            multi.serialize(&mut serializer).unwrap();
+            multi.pack(&mut buf);
         } else {
             let patch: amp::Patch = serde_json::from_str(&json).unwrap();
             // println!("{:?}", patch);
-            patch.serialize(&mut serializer).unwrap();
+            //            patch.serialize(&mut serializer).unwrap();
+            patch.pack(&mut buf);
         }
         // Write vec to file
         std::fs::write(&msgpack_name_copy, buf.clone()).unwrap();

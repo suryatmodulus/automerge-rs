@@ -10,6 +10,10 @@ pub struct InvalidOpId(pub String);
 #[error("Invalid object ID: {0}")]
 pub struct InvalidObjectId(pub String);
 
+#[derive(Error, Debug, PartialEq)]
+#[error("Decode Error: {0}")]
+pub struct DecodeError(pub String);
+
 #[derive(Error, Debug)]
 #[error("Invalid element ID: {0}")]
 pub struct InvalidElementId(pub String);

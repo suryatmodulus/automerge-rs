@@ -123,6 +123,7 @@ impl Backend {
         &mut self,
         mut change: amp::Change,
     ) -> Result<(amp::Patch, Change), AutomergeError> {
+        amp::roundtrip_change(&change).unwrap();
         self.check_for_duplicate(&change)?; // Change has already been applied
 
         let actor_seq = (change.actor_id.clone(), change.seq);

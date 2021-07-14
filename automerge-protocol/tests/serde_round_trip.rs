@@ -1,5 +1,7 @@
 extern crate automerge_protocol as amp;
+use amp::msgpack::Packable;
 use maplit::hashmap;
+use std::convert::TryInto;
 
 #[test]
 fn test_msgpack_roundtrip_change() {
@@ -165,6 +167,16 @@ fn patch_roundtrip_json() {
     let new_patch_json = serde_json::to_string_pretty(&patch).unwrap();
     let new_patch: amp::Patch = serde_json::from_str(&new_patch_json).unwrap();
     assert_eq!(patch, new_patch);
+}
+
+#[test]
+fn msgpack_roundtrip_json() {
+    let mut data = Vec::new();
+    let patch: amp::Patch = serde_json::from_str(PATCH_JSON).unwrap();
+    patch.pack(&mut data);
+    let value = rmpv::decode::value::read_value(&mut data.as_slice()).unwrap();
+    let result: amp::Patch = value.try_into().unwrap();
+    assert_eq!(result, patch);
 }
 
 #[test]
