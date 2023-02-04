@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":[["ApplyChangesError",""],["ApplyPatch",""],["BadSyncMessage",""],["DecodeChange",""],["Fork",""],["Get",""],["Increment",""],["Insert",""],["InsertObject",""],["Load",""],["Materialize",""],["ReceiveSyncMessage",""],["Splice",""]],"struct":[["BadActorId",""],["EncodeChange",""],["Merge",""],["PopPatches",""]]};
